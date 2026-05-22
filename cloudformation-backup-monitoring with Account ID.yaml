@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  CloudFormation template to create EventBridge rule -> CloudWatch LogGroup,
+  MetricFilters, CloudWatch Alarms and SNS topic/subscription for Backup monitoring.
+
+Resources:
+
+  # -----------------------------
+  # CloudWatch Log Group
+  # -----------------------------
+  BackupMonitoringLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/events/AWS-Backup-Monitoring-Log-group
+      RetentionInDays: 7
+
+  # -----------------------------
+  # EventBridge Rule (NO ROLE REQUIRED)
+  # -----------------------------
+  BackupMonitoringRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AWS-Backup-Monitoring-Rule
+      EventPattern: '{"source":["aws.backup"],"detail-type":["Backup Job State Change"]}'
+      State: ENABLED
+      Description: ''
+      EventBusName: default
+      Targets:
+        - Id: BackupMonitoringLogTarget
+          Arn:
+            Fn::Sub: >-
+              arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/events/AWS-Backup-Monitoring-Log-group:*
+  # -----------------------------
+  # Metric Filter: FAILED Backup Jobs
+  # -----------------------------
+  MetricFilterBackupFailed:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref BackupMonitoringLogGroup
+      FilterPattern: '{ $.detail.state = "FAILED" }'
+      MetricTransformations:
+        - MetricValue: '100'
+          MetricNamespace: BackupMonitoring
+          MetricName: NumberOfBackupJobsFailed
+
+  # -----------------------------
+  # Metric Filter: EXPIRED Backup Jobs
+  # -----------------------------
+  MetricFilterBackupExpired:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref BackupMonitoringLogGroup
+      FilterPattern: '{ $.detail.state = "EXPIRED" }'
+      MetricTransformations:
+        - MetricValue: '100'
+          MetricNamespace: BackupMonitoring
+          MetricName: NumberOfBackupJobsExpired
+
+  # -----------------------------
+  # SNS Topic for Alarm Notifications
+  # -----------------------------
+  BackupMonitoringTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: Backup-Monitoring-Topic
+
+  # -----------------------------
+  # SNS HTTPS Subscription (ServiceNow)
+  # -----------------------------
+  BackupMonitoringSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref BackupMonitoringTopic
+      Protocol: https
+      Endpoint: "https://awsoperations:0p3raT!on$5142aW$@sify.service-now.com/aws_alarm.do"
+
+  # -----------------------------
+  # CloudWatch Alarm: FAILED Jobs
+  # -----------------------------
+  AlarmNumberOfBackupJobsFailed:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: NumberOfBackupJobsFailed
+      AlarmDescription: !Sub Alarm when Backup jobs fail on account ${AWS::AccountId}
+      Namespace: BackupMonitoring
+      MetricName: NumberOfBackupJobsFailed
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref BackupMonitoringTopic
+
+  # -----------------------------
+  # CloudWatch Alarm: EXPIRED Jobs
+  # -----------------------------
+  AlarmNumberOfBackupJobsExpired:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: NumberOfBackupJobsExpired
+      AlarmDescription: !Sub Alarm when backup jobs expire on account ${AWS::AccountId}
+      Namespace: BackupMonitoring
+      MetricName: NumberOfBackupJobsExpired
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref BackupMonitoringTopic
+
+Outputs:
+
+  LogGroupName:
+    Description: Name of the CloudWatch Log Group created
+    Value: !Ref BackupMonitoringLogGroup
+
+  EventRuleName:
+    Description: EventBridge rule name
+    Value: !Ref BackupMonitoringRule
+
+  TopicArn:
+    Description: SNS Topic ARN for alarm actions
+    Value: !Ref BackupMonitoringTopic
